@@ -1,0 +1,33 @@
+[oracle]
+chain_id = "cosmoshub-4"
+contract_address = ""
+grpc_endpoint = "http://127.0.0.1:1317"
+probe_interval_secs = 60
+publish_interval_secs = 30
+batch_size = 100
+max_retries = 2
+request_timeout_secs = 10
+ws_timeout_secs = 10
+grpc_timeout_secs = 10
+max_clock_jitter_secs = 30
+jitter_pct = 15
+max_concurrency = 64
+
+[probe.rpc]
+enabled = true
+
+[probe.rest]
+enabled = true
+
+[probe.grpc]
+enabled = true
+
+[probe.websocket]
+enabled = true
+
+[metrics]
+enabled = true
+addr = "127.0.0.1:9090"
+
+[logging]
+level = "info"
