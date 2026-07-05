@@ -1,6 +1,7 @@
+use base64::Engine;
 use reqwest::Client;
 use serde_json::json;
-use base64::Engine;
+use urlencoding::encode;
 
 use crate::{
     config::AppConfig,
@@ -13,7 +14,7 @@ use super::messages::{ChainsResponse, EndpointKind, EndpointsResponse};
 #[derive(Clone)]
 pub struct HttpContractSource {
     http: Client,
-    grpc_endpoint: String,
+    lcd_endpoint: String,
     contract_address: String,
 }
 
@@ -26,7 +27,7 @@ impl HttpContractSource {
 
         Ok(Self {
             http,
-            grpc_endpoint: cfg.oracle.grpc_endpoint.clone(),
+            lcd_endpoint: cfg.oracle.lcd_endpoint.clone(),
             contract_address: cfg.oracle.contract_address.clone(),
         })
     }
@@ -60,11 +61,17 @@ impl HttpContractSource {
             return Ok(Vec::new());
         }
 
+        let query_data = serde_json::to_vec(&json!({
+            "get_chains": {"start_after": null, "limit": 100}
+        }))
+        .map_err(|e| OracleError::ContractSource(e.to_string()))?;
+            let query_data_b64 = base64::engine::general_purpose::STANDARD.encode(query_data);
+            let query_data_path = encode(&query_data_b64);
         let endpoint = format!(
             "{}/cosmwasm/wasm/v1/contract/{}/smart/{}",
-            self.grpc_endpoint.trim_end_matches('/'),
+            self.lcd_endpoint.trim_end_matches('/'),
             self.contract_address,
-            hex::encode(serde_json::to_vec(&json!({"get_chains": {"start_after": null, "limit": 100}})).map_err(|e| OracleError::ContractSource(e.to_string()))?)
+            query_data_path
         );
 
         let res = self
@@ -74,37 +81,42 @@ impl HttpContractSource {
             .await
             .map_err(|e| OracleError::ContractSource(e.to_string()))?;
 
-        let body: serde_json::Value = res
-            .json()
+        let status = res.status();
+        let body_text = res
+            .text()
             .await
-            .map_err(|e| OracleError::ContractSource(e.to_string()))?;
+            .map_err(|e| OracleError::ContractSource(format!("cannot read response body: {e}")))?;
+        if !status.is_success() {
+            return Err(OracleError::ContractSource(format!(
+                "LCD smart query failed with status {}. Body starts with: {}",
+                status,
+                body_text.chars().take(160).collect::<String>()
+            )));
+        }
 
-        let data = body
-            .get("data")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| OracleError::ContractSource("missing base64 data in get_chains".to_string()))?;
+        let body: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|e| OracleError::ContractSource(format!("invalid JSON response: {e}")))?;
 
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|e| OracleError::ContractSource(format!("invalid base64: {e}")))?;
-        let parsed: ChainsResponse = serde_json::from_slice(&decoded)
-            .map_err(|e| OracleError::ContractSource(format!("invalid get_chains payload: {e}")))?;
+        let parsed: ChainsResponse = parse_data_payload(&body, "get_chains")?;
         Ok(parsed.chains.into_iter().map(|c| c.chain_id).collect())
     }
 
     async fn fetch_chain_endpoints(&self, chain_id: &str) -> Result<EndpointsResponse, OracleError> {
+        let query_data = serde_json::to_vec(&json!({
+            "get_endpoints": {
+                "chain_id": chain_id,
+                "kind": null,
+                "include_inactive": false
+            }
+        }))
+        .map_err(|e| OracleError::ContractSource(e.to_string()))?;
+            let query_data_b64 = base64::engine::general_purpose::STANDARD.encode(query_data);
+            let query_data_path = encode(&query_data_b64);
         let endpoint = format!(
             "{}/cosmwasm/wasm/v1/contract/{}/smart/{}",
-            self.grpc_endpoint.trim_end_matches('/'),
+            self.lcd_endpoint.trim_end_matches('/'),
             self.contract_address,
-            hex::encode(serde_json::to_vec(&json!({
-                "get_endpoints": {
-                    "chain_id": chain_id,
-                    "kind": null,
-                    "include_inactive": false
-                }
-            }))
-            .map_err(|e| OracleError::ContractSource(e.to_string()))?)
+            query_data_path
         );
 
         let res = self
@@ -114,21 +126,56 @@ impl HttpContractSource {
             .await
             .map_err(|e| OracleError::ContractSource(e.to_string()))?;
 
-        let body: serde_json::Value = res
-            .json()
+        let status = res.status();
+        let body_text = res
+            .text()
             .await
-            .map_err(|e| OracleError::ContractSource(e.to_string()))?;
+            .map_err(|e| OracleError::ContractSource(format!("cannot read response body: {e}")))?;
+        if !status.is_success() {
+            return Err(OracleError::ContractSource(format!(
+                "LCD smart query failed with status {}. Body starts with: {}",
+                status,
+                body_text.chars().take(160).collect::<String>()
+            )));
+        }
 
-        let data = body
-            .get("data")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| OracleError::ContractSource("missing base64 data in get_endpoints".to_string()))?;
+        let body: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|e| OracleError::ContractSource(format!("invalid JSON response: {e}")))?;
 
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|e| OracleError::ContractSource(format!("invalid base64: {e}")))?;
-        let parsed: EndpointsResponse = serde_json::from_slice(&decoded)
-            .map_err(|e| OracleError::ContractSource(format!("invalid get_endpoints payload: {e}")))?;
+        let parsed: EndpointsResponse = parse_data_payload(&body, "get_endpoints")?;
         Ok(parsed)
     }
+}
+
+fn parse_data_payload<T>(body: &serde_json::Value, query_name: &str) -> Result<T, OracleError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let data_value = body.get("data").ok_or_else(|| {
+        OracleError::ContractSource(format!("missing data field in {query_name} response"))
+    })?;
+
+    if data_value.is_object() || data_value.is_array() {
+        return serde_json::from_value(data_value.clone()).map_err(|e| {
+            OracleError::ContractSource(format!("invalid {query_name} JSON object payload: {e}"))
+        });
+    }
+
+    let data = data_value.as_str().ok_or_else(|| {
+        OracleError::ContractSource(format!(
+            "unsupported data field type in {query_name} response"
+        ))
+    })?;
+
+    if data.trim_start().starts_with('{') || data.trim_start().starts_with('[') {
+        return serde_json::from_str(data).map_err(|e| {
+            OracleError::ContractSource(format!("invalid {query_name} JSON string payload: {e}"))
+        });
+    }
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|e| OracleError::ContractSource(format!("invalid base64 in {query_name}: {e}")))?;
+    serde_json::from_slice(&decoded)
+        .map_err(|e| OracleError::ContractSource(format!("invalid {query_name} payload: {e}")))
 }

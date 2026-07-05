@@ -1,45 +1,109 @@
 # Oracle Verification Daemon (Rust)
 
-MVP implementation aligned with the oracle verification specification.
+The Oracle Verification Daemon continuously checks endpoint health for chains listed in the Cosm Registry smart contract.
+It fetches active endpoints, probes them over multiple protocols, normalizes observations, and prepares publication batches.
 
-## Current scope
+## Project goals
 
-- Full daemon scaffold with modular architecture.
-- Contract refresh at each cycle via smart queries.
-- Multi-protocol probe engine: RPC, REST, WebSocket, gRPC.
-- Observation normalization with online/offline status and latency.
-- Batching by chain id.
-- Publisher abstraction with degraded in-memory queue mode.
-- Prometheus metrics endpoint.
+- Keep endpoint health data fresh and machine-readable.
+- Probe heterogeneous endpoint types with a single pipeline.
+- Expose operational metrics for observability.
+- Provide a safe fallback mode while on-chain publish messages are not yet available.
 
-## Why degraded publish mode
+## Current behavior
 
-The current Cosm-registry contract does not yet expose `SubmitEndpointStatuses`.
-The daemon therefore keeps batches in memory and logs publication intent.
+1. Read configured chain targets from the CosmWasm registry contract through LCD smart queries.
+2. Probe active endpoints (RPC, REST, gRPC, WebSocket) with bounded concurrency and jitter.
+3. Build normalized observations with status and latency.
+4. Batch observations by `chain_id`.
+5. Push batches to a publisher abstraction.
 
-## Run
+## Degraded publish mode
 
-1. Copy the sample config.
-2. Adapt values for your environment.
-3. Start the daemon.
+The daemon currently uses `DegradedPublisher`.
+Because the contract does not expose a submit message for observations yet, batches are queued in memory and logged.
+This keeps probe and aggregation logic production-like while avoiding fake on-chain writes.
+
+## Architecture overview
+
+- `src/main.rs`: startup wiring (config, logging, metrics server, scheduler).
+- `src/config.rs`: config loading, env overrides, validation.
+- `src/scheduler.rs`: probe loop, concurrency control, batching, publish orchestration.
+- `src/contract/queries.rs`: LCD smart query client and payload decoding.
+- `src/probes/`: protocol-specific probe implementations and probe engine.
+- `src/publisher.rs`: publisher trait and degraded in-memory publisher.
+- `src/storage/`: backoff and queue storage utilities.
+- `src/metrics.rs`: Prometheus registry and `/metrics` HTTP server.
+- `src/models.rs`: shared domain models.
+
+## Requirements
+
+- Rust toolchain (stable).
+- Network access to:
+	- LCD endpoint configured in `oracle.toml`.
+	- Probed chain endpoints.
+
+## Quick start
+
+1. Copy and edit the sample configuration:
 
 ```bash
 cp oracle.example.toml oracle.toml
+```
+
+2. Start the daemon:
+
+```bash
 cargo run
 ```
 
-## Config
+3. Optional explicit config path:
 
-A sample config file is provided at `oracle.example.toml`.
+```bash
+ORACLE_CONFIG=oracle.toml cargo run
+```
 
-You can override some values with environment variables:
+## Configuration
 
-- `ORACLE_CONFIG`
-- `ORACLE_LOG_LEVEL`
-- `ORACLE_METRICS_ADDR`
+Base file: `oracle.example.toml`.
 
-## Build checks
+Main sections:
+
+- `[oracle]`: contract source, intervals, timeouts, retries, batching, concurrency, jitter.
+- `[probe.*]`: protocol toggles (`rpc`, `rest`, `grpc`, `websocket`).
+- `[metrics]`: metrics enablement and bind address.
+- `[logging]`: log level.
+
+Environment overrides:
+
+- `ORACLE_CONFIG`: config file path.
+- `ORACLE_LOG_LEVEL`: log level override.
+- `ORACLE_METRICS_ADDR`: metrics bind address override.
+
+## Observability
+
+If metrics are enabled, the daemon serves Prometheus metrics on:
+
+- `GET /metrics`
+
+Example (default config): `http://127.0.0.1:9090/metrics`
+
+## Development commands
 
 ```bash
 cargo check
+cargo test
+cargo run
 ```
+
+## Known limitations
+
+- No on-chain submission yet (degraded publisher only).
+- Publication queue is in-memory and not persisted across restarts.
+- Endpoint verification and ranking are outside current scope.
+
+## Next milestones
+
+- Add on-chain submission publisher when contract execute message is available.
+- Persist publish queue for crash resilience.
+- Add retry policies and dead-letter handling for failed publication flows.

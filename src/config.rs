@@ -16,7 +16,10 @@ pub struct AppConfig {
 pub struct OracleConfig {
     pub chain_id: String,
     pub contract_address: String,
-    pub grpc_endpoint: String,
+    #[serde(alias = "grpc_endpoint")]
+    pub lcd_endpoint: String,
+    #[serde(default)]
+    pub wallet: WalletConfig,
     pub probe_interval_secs: u64,
     pub publish_interval_secs: u64,
     pub batch_size: usize,
@@ -27,6 +30,31 @@ pub struct OracleConfig {
     pub max_clock_jitter_secs: u64,
     pub jitter_pct: u8,
     pub max_concurrency: usize,
+}
+
+impl Default for WalletConfig {
+    fn default() -> Self {
+        Self {
+            mnemonic: None,
+            prefix: "cosmos".to_string(),
+            derivation_path: "m/44'/118'/0'/0/0".to_string(),
+            fee_denom: "uatom".to_string(),
+            fee_amount: 1_500,
+            gas_limit: 250_000,
+            memo: Some("oracle verification".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletConfig {
+    pub mnemonic: Option<String>,
+    pub prefix: String,
+    pub derivation_path: String,
+    pub fee_denom: String,
+    pub fee_amount: u128,
+    pub gas_limit: u64,
+    pub memo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +87,8 @@ impl Default for AppConfig {
             oracle: OracleConfig {
                 chain_id: "localnet".to_string(),
                 contract_address: "".to_string(),
-                grpc_endpoint: "http://127.0.0.1:9090".to_string(),
+                lcd_endpoint: "http://127.0.0.1:1317".to_string(),
+                wallet: WalletConfig::default(),
                 probe_interval_secs: 60,
                 publish_interval_secs: 30,
                 batch_size: 100,
@@ -107,6 +136,31 @@ impl AppConfig {
         if let Ok(value) = env::var("ORACLE_METRICS_ADDR") {
             cfg.metrics.addr = value;
         }
+        if let Ok(value) = env::var("ORACLE_WALLET_MNEMONIC") {
+            cfg.oracle.wallet.mnemonic = Some(value);
+        }
+        if let Ok(value) = env::var("ORACLE_WALLET_PREFIX") {
+            cfg.oracle.wallet.prefix = value;
+        }
+        if let Ok(value) = env::var("ORACLE_WALLET_DERIVATION_PATH") {
+            cfg.oracle.wallet.derivation_path = value;
+        }
+        if let Ok(value) = env::var("ORACLE_FEE_DENOM") {
+            cfg.oracle.wallet.fee_denom = value;
+        }
+        if let Ok(value) = env::var("ORACLE_FEE_AMOUNT") {
+            cfg.oracle.wallet.fee_amount = value
+                .parse()
+                .map_err(|e| OracleError::Config(format!("invalid ORACLE_FEE_AMOUNT: {e}")))?;
+        }
+        if let Ok(value) = env::var("ORACLE_GAS_LIMIT") {
+            cfg.oracle.wallet.gas_limit = value
+                .parse()
+                .map_err(|e| OracleError::Config(format!("invalid ORACLE_GAS_LIMIT: {e}")))?;
+        }
+        if let Ok(value) = env::var("ORACLE_MEMO") {
+            cfg.oracle.wallet.memo = Some(value);
+        }
 
         cfg.validate()?;
         Ok(cfg)
@@ -126,6 +180,20 @@ impl AppConfig {
         }
         if self.oracle.max_concurrency == 0 {
             return Err(OracleError::Config("max_concurrency must be > 0".to_string()));
+        }
+        if self.oracle.lcd_endpoint.trim().is_empty() {
+            return Err(OracleError::Config("lcd_endpoint must not be empty".to_string()));
+        }
+        if self.oracle.wallet.prefix.trim().is_empty() {
+            return Err(OracleError::Config("wallet.prefix must not be empty".to_string()));
+        }
+        if self.oracle.wallet.derivation_path.trim().is_empty() {
+            return Err(OracleError::Config(
+                "wallet.derivation_path must not be empty".to_string(),
+            ));
+        }
+        if self.oracle.wallet.fee_denom.trim().is_empty() {
+            return Err(OracleError::Config("wallet.fee_denom must not be empty".to_string()));
         }
         Ok(())
     }

@@ -2,7 +2,7 @@ pub mod grpc;
 pub mod rest;
 pub mod rpc;
 pub mod ws;
-
+use tracing::{debug};
 use reqwest::Client;
 
 use crate::{
@@ -27,6 +27,7 @@ impl ProbeEngine {
     }
 
     pub async fn probe(&self, target: &ProbeTarget, now: u64) -> Result<EndpointObservation, OracleError> {
+        debug!("probing endpoint: {} ({:?})", target.url, target.endpoint_type);
         match target.endpoint_type {
             EndpointType::Rpc if self.cfg.probe.rpc.enabled => {
                 rpc::probe_rpc(&self.http, &self.cfg, target, now).await

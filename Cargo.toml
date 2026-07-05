@@ -21,3 +21,6 @@ axum = "0.7"
 rand = "0.8"
 base64 = "0.22"
 hex = "0.4"
+urlencoding = "2"
+cosmrs = { version = "0.22", features = ["cosmwasm"] }
+bip39 = "2"

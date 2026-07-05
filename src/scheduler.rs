@@ -69,7 +69,10 @@ impl<P: Publisher> Scheduler<P> {
                 if jitter_delay > 0 {
                     tokio::time::sleep(Duration::from_millis(jitter_delay)).await;
                 }
-                probe_engine.probe(&target, now).await
+                match probe_engine.probe(&target, now).await {
+                    Ok(obs) => Ok(obs),
+                    Err(e) => Err((target, e)),
+                }
             }));
         }
 
@@ -89,10 +92,19 @@ impl<P: Publisher> Scheduler<P> {
                     self.backoff.clear(&obs.chain_id, obs.endpoint_id);
                     observations.push(obs);
                 }
-                Ok(Err(e)) => {
-                    self.metrics.probe_failure_total.inc();
-                    warn!(error = %e, "probe error");
-                }
+                Ok(Err((target, e))) => {
+                self.metrics.probe_failure_total.inc();
+                warn!(url = %target.url, error = %e, "probe error - generating offline observation");
+                
+                observations.push(EndpointObservation {
+                    endpoint_id: target.endpoint_id,
+                    chain_id: target.chain_id.clone(),
+                    endpoint_type: target.endpoint_type.clone(), 
+                    status: EndpointStatus::Offline,
+                    latency_ms: None, // No latency for a network failure
+                    checked_at: now,
+                });
+            }
                 Err(e) => {
                     self.metrics.probe_failure_total.inc();
                     warn!(error = %e, "probe task join error");

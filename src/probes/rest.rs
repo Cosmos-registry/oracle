@@ -48,12 +48,13 @@ pub async fn probe_rest(
         .map(|s| s == target.chain_id)
         .unwrap_or(false);
 
-    let has_timestamp = status_json
-        .pointer("/status/sync_info/latest_block_time")
-        .or_else(|| status_json.pointer("/sync_info/latest_block_time"))
-        .is_some();
+    // let has_timestamp = status_json
+    //     .pointer("/status/sync_info/latest_block_time")
+    //     .or_else(|| status_json.pointer("/sync_info/latest_block_time"))
+    //     .is_some();
 
-    let online = network_ok && has_timestamp;
+    // let online = network_ok && has_timestamp;
+    let online = network_ok;
     let elapsed_ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
 
     Ok(EndpointObservation {

@@ -17,7 +17,7 @@ use crate::{
     error::OracleError,
     metrics::Metrics,
     probes::ProbeEngine,
-    publisher::DegradedPublisher,
+    publisher::{ActivePublisher, DegradedPublisher, SignedPublisher},
     scheduler::Scheduler,
 };
 
@@ -25,8 +25,9 @@ use crate::{
 async fn main() -> Result<(), OracleError> {
     let cfg = AppConfig::load()?;
 
-    let filter =
-        EnvFilter::try_new(cfg.logging.level.clone()).unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(cfg.logging.level.clone()))
+        .unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter).with_target(false).init();
 
     let metrics = Metrics::new()?;
@@ -43,12 +44,19 @@ async fn main() -> Result<(), OracleError> {
     info!(
         chain_id = %cfg.oracle.chain_id,
         contract_address = %cfg.oracle.contract_address,
+        lcd_endpoint = %cfg.oracle.lcd_endpoint,
         "oracle daemon starting"
     );
 
     let source = HttpContractSource::new(&cfg)?;
     let probe_engine = ProbeEngine::new(cfg.clone())?;
-    let publisher = DegradedPublisher::default();
+    let publisher = match SignedPublisher::new(cfg.clone()) {
+        Ok(publisher) => ActivePublisher::Signed(publisher),
+        Err(error) => {
+            tracing::warn!(error = %error, "using degraded publisher");
+            ActivePublisher::Degraded(DegradedPublisher::default())
+        }
+    };
 
     let scheduler = Scheduler::new(cfg, source, probe_engine, publisher, metrics);
     scheduler.run().await;

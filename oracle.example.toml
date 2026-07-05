@@ -1,7 +1,7 @@
 [oracle]
 chain_id = "cosmoshub-4"
 contract_address = ""
-grpc_endpoint = "http://127.0.0.1:1317"
+lcd_endpoint = "http://127.0.0.1:1317"
 probe_interval_secs = 60
 publish_interval_secs = 30
 batch_size = 100
